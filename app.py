@@ -466,10 +466,16 @@ if 'user_role' not in st.session_state:
     st.session_state.user_role = ''
 
 # Sidebar Menu based on Role
-if st.session_state.user_role == "Admin":
-    menu_options = ["Employee Engagement", "Leaderboard", "Admin - Manage Posts", "Admin - Manage Users", "Admin - Manage Admins", "Admin - Reports", "Change Password"]
-else:
+if not st.session_state.logged_in:
+    # Public view: Only show Engagement and Login
     menu_options = ["Employee Engagement", "Admin Login"]
+else:
+    # Logged in view
+    if st.session_state.user_role == "Admin":
+        menu_options = ["Employee Engagement", "Leaderboard", "Admin - Manage Posts", "Admin - Manage Users", "Admin - Manage Admins", "Admin - Reports", "Change Password"]
+    else:
+        # Logged in as Employee: Show core engagement features and settings
+        menu_options = ["Employee Engagement", "Leaderboard", "Change Password"]
 
 menu = st.sidebar.radio("Choose Page", menu_options)
 
@@ -728,6 +734,10 @@ elif menu == "Admin Login":
 
 
 elif menu == "Leaderboard":
+    if not st.session_state.logged_in:
+        st.error("Please login to view the Leaderboard.")
+        st.stop()
+        
     page_intro("Leaderboard", "Track top employees, departments, and monthly engagement performance.")
 
     def format_leaderboard(df):
@@ -818,6 +828,10 @@ elif menu == "Leaderboard":
 
 
 elif menu == "Admin - Manage Posts":
+    if st.session_state.user_role != "Admin":
+        st.error("Access Denied.")
+        st.stop()
+        
     page_intro("Admin - Manage Posts", "Create social media posts, select platforms, and notify employees.")
     
     # 3. Proactive check for SMTP configuration safely without crashing the app
@@ -962,6 +976,10 @@ elif menu == "Admin - Manage Posts":
         st.dataframe(logs.sort_values(by="date_time", ascending=False), use_container_width=True, hide_index=True)
 
 elif menu == "Admin - Manage Users":
+    if st.session_state.user_role != "Admin":
+        st.error("Access Denied.")
+        st.stop()
+        
     page_intro("Admin - Manage Users", "Manage employees, roles, status, and access.")
 
     st.subheader("Add New User")
@@ -1143,6 +1161,10 @@ elif menu == "Admin - Reports":
             )
 
 elif menu == "Change Password":
+    if not st.session_state.logged_in:
+        st.error("Please login first to change your password.")
+        st.stop()
+        
     st.markdown('<div class="main-header">Change Password</div>', unsafe_allow_html=True)
     st.subheader("Update Your Password")
 
