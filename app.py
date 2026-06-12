@@ -458,11 +458,165 @@ if 'remember_me_checked' not in st.session_state:
     st.session_state.remember_me_checked = False
 if 'show_reset_password_form' not in st.session_state:
     st.session_state.show_reset_password_form = False
+if 'user_email' not in st.session_state:
+    st.session_state.user_email = ''
+if 'user_name' not in st.session_state:
+    st.session_state.user_name = ''
+if 'user_role' not in st.session_state:
+    st.session_state.user_role = ''
 
-if not st.session_state.logged_in:
+# Sidebar Menu based on Role
+if st.session_state.user_role == "Admin":
+    menu_options = ["Employee Engagement", "Leaderboard", "Admin - Manage Posts", "Admin - Manage Users", "Admin - Manage Admins", "Admin - Reports", "Change Password"]
+else:
+    menu_options = ["Employee Engagement", "Admin Login"]
+
+menu = st.sidebar.radio("Choose Page", menu_options)
+
+st.sidebar.divider()
+if st.session_state.logged_in:
+    st.sidebar.write(f"Logged in as: **{st.session_state.user_name}**")
+    st.sidebar.write(f"Role: {st.session_state.user_role}")
+    if st.sidebar.button("Logout"):
+        st.session_state.logged_in = False
+        st.session_state.user_email = ''
+        st.session_state.user_name = ''
+        st.session_state.user_role = ''
+        st.rerun()
+else:
+    st.sidebar.info("Public Access: Admin features are hidden.")
+
+
+if menu == "Employee Engagement":
+    # Calculate badges for Employee Engagement page
+    user_role = st.session_state.get('user_role', 'User')
+    user_email = st.session_state.get('user_email', '')
+    eng_points_df = pd.read_csv(ENGAGEMENT_FILE)
+    user_total_points = eng_points_df[eng_points_df["employee_email"] == user_email]["points"].sum()
+    posts_df = pd.read_csv(POSTS_FILE)
+    active_posts_count = posts_df['post_title'].nunique() # Count unique post titles
+
+    page_intro(
+        "Employee Engagement",
+        "Open the post, complete your actions, and submit your engagement to collect points.",
+        badges=[f"Role: {user_role}", f"Your Points: {user_total_points}", f"Active Posts: {active_posts_count}"]
+    )
+
+    st.subheader("Your Information")
+    col_info1, col_info2 = st.columns(2)
+    is_admin_logged_in = st.session_state.logged_in
+
+    with col_info1:
+        emp_name = st.text_input("Full Name (Required)", value=st.session_state.get('user_name', ''), disabled=is_admin_logged_in, key="eng_name_input")
+        emp_email = st.text_input("Company Email (Optional)", value=st.session_state.get('user_email', ''), disabled=is_admin_logged_in, key="eng_email_input")
+    with col_info2:
+        dept_options = ["", "Marketing", "Sales", "HR", "Operations", "Finance", "IT", "Other"]
+        current_dept = st.session_state.get('user_department', '')
+        default_dept_idx = dept_options.index(current_dept) if current_dept in dept_options else 0
+        emp_dept = st.selectbox("Department (Required)", dept_options, index=default_dept_idx, disabled=is_admin_logged_in, key="eng_dept_select")
+    
+    # Feature 3 & 4: Badges Display
+    eng_points = pd.read_csv(ENGAGEMENT_FILE)
+    current_user_email = st.session_state.get('user_email', '')
+    if current_user_email:
+        user_points = eng_points[eng_points["employee_email"] == current_user_email]["points"].sum()
+        user_badges = calculate_badges(user_points)
+        if user_badges:
+            st.markdown(f"**Your Badges:** {' '.join(user_badges)}")
+    
+    
+    # Fetch all posts
+    posts = pd.read_csv(POSTS_FILE)
+    
+    if posts.empty:
+        st.markdown('<div class="reach-card"><p>No posts available to engage with.</p></div>', unsafe_allow_html=True)
+    else:
+        st.subheader("Select Post")
+        # Create a list of post titles for selection, showing newest first and including platform/date
+        post_options_display = [f"{row['post_title']} ({row['platform']} - {row['date'].split(' ')[0]})" for index, row in posts.iloc[::-1].iterrows()]
+        selected_post_display = st.selectbox("Choose the post you engaged with:", post_options_display, key="post_selector")
+        
+        # Find the actual post data based on the selected display string
+        selected_index = post_options_display.index(selected_post_display)
+        selected_post = posts.iloc[::-1].iloc[selected_index] # Get the corresponding row from the reversed DataFrame
+        platform = selected_post["platform"]
+        post_link = selected_post["post_link"]
+        campaign_name = selected_post.get("campaign_name", "General")
+
+        col_left, col_right = st.columns(2)
+
+        with col_left:
+            st.subheader("Post Details")
+            st.write(f"**Campaign:** {campaign_name}")
+            st.write(f"**Platform:** {platform}")
+            st.link_button("Open Social Media Post", post_link)
+
+        with col_right:
+            st.subheader("Mark Your Actions")
+            liked = st.checkbox("👍 I liked the post (+5 pts)")
+            commented = st.checkbox("💬 I commented on the post (+10 pts)")
+            shared = st.checkbox("🔁 I shared / reposted the post (+20 pts)")
+            
+            points_preview = (5 if liked else 0) + (10 if commented else 0) + (20 if shared else 0)
+            st.markdown(f"**Total points to earn: {points_preview}**")
+
+        if st.button("Submit Engagement", type="primary", key="submit_engagement_button_logged_in"):
+            points = 0
+            if liked: points += 5
+            if commented: points += 10
+            if shared: points += 20
+
+            if not emp_name.strip():
+                st.error("Please enter your full name.")
+            elif not emp_dept:
+                st.error("Please select your department.")
+            elif points == 0:
+                st.error("Please select at least one action.")
+            else:
+                # Check for duplicate submission
+                engagement_data = pd.read_csv(ENGAGEMENT_FILE)
+                
+                if emp_email.strip():
+                    # Rule 5: If email provided, use it for duplicate prevention
+                    already_submitted = not engagement_data[
+                        (engagement_data["employee_email"] == emp_email.strip()) & 
+                        (engagement_data["post_link"] == post_link)
+                    ].empty
+                else:
+                    # Rule 6: If email not provided, use name + department + post/platform
+                    already_submitted = not engagement_data[
+                        (engagement_data["employee_name"] == emp_name.strip()) & 
+                        (engagement_data["department"] == emp_dept) & 
+                        (engagement_data["post_link"] == post_link)
+                    ].empty
+
+                if already_submitted:
+                    st.warning(f"You have already submitted engagement for '{selected_post['post_title']}'. Duplicate claims are not allowed.")
+                else:
+                    new_record = pd.DataFrame([{
+                        "employee_name": emp_name.strip(),
+                        "employee_email": emp_email.strip() if emp_email else "",
+                        "department": emp_dept,
+                        "post_title": selected_post['post_title'],
+                        "campaign_name": campaign_name,
+                        "platform": platform,
+                        "post_link": post_link,
+                        "liked": liked,
+                        "commented": commented,
+                        "shared": shared,
+                        "points": points,
+                        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }])
+
+                    updated_data = pd.concat([engagement_data, new_record], ignore_index=True)
+                    updated_data.to_csv(ENGAGEMENT_FILE, index=False)
+
+                    st.success(f"Success! You earned {points} points for your engagement on '{selected_post['post_title']}'.")
+
+elif menu == "Admin Login":
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.subheader("Login")
+        st.subheader("Admin Login")
         default_email_value = st.session_state.remembered_email
         login_email_input = st.text_input("Email", value=default_email_value, key="login_email_input_main")
         login_password_input = st.text_input("Password", type="password", key="login_password_input_main")
@@ -571,145 +725,6 @@ if not st.session_state.logged_in:
                                 st.success("Your password has been reset successfully. You can now log in.")
                                 st.session_state.show_reset_password_form = False
                                 st.rerun()
-    st.stop()
-
-# Sidebar Menu based on Role
-if st.session_state.user_role == "Admin":
-    menu_options = ["Employee Engagement", "Leaderboard", "Admin - Manage Posts", "Admin - Manage Users", "Admin - Manage Admins", "Admin - Reports", "Change Password"]
-else:
-    menu_options = ["Employee Engagement", "Leaderboard", "Change Password"]
-
-menu = st.sidebar.radio("Choose Page", menu_options)
-
-st.sidebar.divider()
-st.sidebar.write(f"Logged in as: **{st.session_state.user_name}**")
-st.sidebar.write(f"Role: {st.session_state.user_role}")
-if st.sidebar.button("Logout"):
-    st.session_state.logged_in = False
-    st.rerun()
-
-
-if menu == "Employee Engagement":
-    # Calculate badges for Employee Engagement page
-    user_role = st.session_state.get('user_role', 'User')
-    user_email = st.session_state.get('user_email', '')
-    eng_points_df = pd.read_csv(ENGAGEMENT_FILE)
-    user_total_points = eng_points_df[eng_points_df["employee_email"] == user_email]["points"].sum()
-    posts_df = pd.read_csv(POSTS_FILE)
-    active_posts_count = posts_df['post_title'].nunique() # Count unique post titles
-
-    page_intro(
-        "Employee Engagement",
-        "Open the post, complete your actions, and submit your engagement to collect points.",
-        badges=[f"Role: {user_role}", f"Your Points: {user_total_points}", f"Active Posts: {active_posts_count}"]
-    )
-
-    st.subheader("Your Information")
-    col_info1, col_info2 = st.columns(2)
-    with col_info1:
-        emp_name = st.text_input("Full Name (Required)", value=st.session_state.get('user_name', ''), key="eng_name_input")
-        emp_email = st.text_input("Company Email (Optional)", value=st.session_state.get('user_email', ''), key="eng_email_input")
-    with col_info2:
-        dept_options = ["", "Marketing", "Sales", "HR", "Operations", "Finance", "IT", "Other"]
-        current_dept = st.session_state.get('user_department', '')
-        default_dept_idx = dept_options.index(current_dept) if current_dept in dept_options else 0
-        emp_dept = st.selectbox("Department (Required)", dept_options, index=default_dept_idx, key="eng_dept_select")
-    
-    # Feature 3 & 4: Badges Display
-    eng_points = pd.read_csv(ENGAGEMENT_FILE)
-    user_points = eng_points[eng_points["employee_email"] == st.session_state.user_email]["points"].sum()
-    user_badges = calculate_badges(user_points)
-    if user_badges:
-        st.markdown(f"**Your Badges:** {' '.join(user_badges)}")
-    
-    
-    # Fetch all posts
-    posts = pd.read_csv(POSTS_FILE)
-    
-    if posts.empty:
-        st.markdown('<div class="reach-card"><p>No posts available to engage with.</p></div>', unsafe_allow_html=True)
-    else:
-        st.subheader("Select Post")
-        # Create a list of post titles for selection, showing newest first and including platform/date
-        post_options_display = [f"{row['post_title']} ({row['platform']} - {row['date'].split(' ')[0]})" for index, row in posts.iloc[::-1].iterrows()]
-        selected_post_display = st.selectbox("Choose the post you engaged with:", post_options_display, key="post_selector")
-        
-        # Find the actual post data based on the selected display string
-        selected_index = post_options_display.index(selected_post_display)
-        selected_post = posts.iloc[::-1].iloc[selected_index] # Get the corresponding row from the reversed DataFrame
-        platform = selected_post["platform"]
-        post_link = selected_post["post_link"]
-        campaign_name = selected_post.get("campaign_name", "General")
-
-        col_left, col_right = st.columns(2)
-
-        with col_left:
-            st.subheader("Post Details")
-            st.write(f"**Campaign:** {campaign_name}")
-            st.write(f"**Platform:** {platform}")
-            st.link_button("Open Social Media Post", post_link)
-
-        with col_right:
-            st.subheader("Mark Your Actions")
-            liked = st.checkbox("👍 I liked the post (+5 pts)")
-            commented = st.checkbox("💬 I commented on the post (+10 pts)")
-            shared = st.checkbox("🔁 I shared / reposted the post (+20 pts)")
-            
-            points_preview = (5 if liked else 0) + (10 if commented else 0) + (20 if shared else 0)
-            st.markdown(f"**Total points to earn: {points_preview}**")
-
-        if st.button("Submit Engagement", type="primary", key="submit_engagement_button_logged_in"):
-            points = 0
-            if liked: points += 5
-            if commented: points += 10
-            if shared: points += 20
-
-            if not emp_name.strip():
-                st.error("Please enter your full name.")
-            elif not emp_dept:
-                st.error("Please select your department.")
-            elif points == 0:
-                st.error("Please select at least one action.")
-            else:
-                # Check for duplicate submission
-                engagement_data = pd.read_csv(ENGAGEMENT_FILE)
-                
-                if emp_email.strip():
-                    # Rule 5: If email provided, use it for duplicate prevention
-                    already_submitted = not engagement_data[
-                        (engagement_data["employee_email"] == emp_email.strip()) & 
-                        (engagement_data["post_link"] == post_link)
-                    ].empty
-                else:
-                    # Rule 6: If email not provided, use name + department + post/platform
-                    already_submitted = not engagement_data[
-                        (engagement_data["employee_name"] == emp_name.strip()) & 
-                        (engagement_data["department"] == emp_dept) & 
-                        (engagement_data["post_link"] == post_link)
-                    ].empty
-
-                if already_submitted:
-                    st.warning(f"You have already submitted engagement for '{selected_post['post_title']}'. Duplicate claims are not allowed.")
-                else:
-                    new_record = pd.DataFrame([{
-                        "employee_name": emp_name.strip(),
-                        "employee_email": emp_email.strip() if emp_email else "",
-                        "department": emp_dept,
-                        "post_title": selected_post['post_title'],
-                        "campaign_name": campaign_name,
-                        "platform": platform,
-                        "post_link": post_link,
-                        "liked": liked,
-                        "commented": commented,
-                        "shared": shared,
-                        "points": points,
-                        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    }])
-
-                    updated_data = pd.concat([engagement_data, new_record], ignore_index=True)
-                    updated_data.to_csv(ENGAGEMENT_FILE, index=False)
-
-                    st.success(f"Success! You earned {points} points for your engagement on '{selected_post['post_title']}'.")
 
 
 elif menu == "Leaderboard":
