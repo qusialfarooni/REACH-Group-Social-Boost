@@ -768,9 +768,17 @@ elif menu == "Leaderboard":
                 cols[i].metric(place_names[i], f"{pts} pts", email.split('@')[0])
             
             # Top Dept of month
-            m_merged = monthly_data.merge(users[['email', 'department']], left_on='employee_email', right_on='email')
-            top_dept_m = m_merged.groupby('department')['points'].sum().idxmax()
-            st.success(f"🏢 **Top Department of the Month:** {top_dept_m}")
+            m_merged = monthly_data.merge(users[['email', 'department']], left_on='employee_email', right_on='email', how='left')
+            if not m_merged.empty and "points" in m_merged.columns:
+                if "department" not in m_merged.columns:
+                    m_merged["department"] = "Unknown"
+                else:
+                    m_merged["department"] = m_merged["department"].fillna("Unknown")
+                
+                dept_points_m = m_merged.groupby("department")["points"].sum()
+                if not dept_points_m.empty:
+                    top_dept_m = dept_points_m.idxmax()
+                    st.success(f"🏢 **Top Department of the Month:** {top_dept_m}")
         else:
             st.info("Engagement for the current month is just starting!")
 
@@ -802,14 +810,22 @@ elif menu == "Leaderboard":
             leaderboard["Badges"] = leaderboard["Total Points"].apply(lambda x: "".join(calculate_badges(x)))
         st.markdown("---")
         st.subheader("🏢 Department Leaderboard")
-        dept_stats = merged_data.groupby("department").agg(
-            Total_Points=("points", "sum"),
-            Participating_Employees=("employee_email", "nunique"),
-            Completed_Engagements=("employee_email", "count")
-        ).reset_index().sort_values(by="Total_Points", ascending=False)
-        
-        dept_stats.columns = ["Department", "Points", "Employees", "Engagements"]
-        st.table(dept_stats)
+        if not merged_data.empty and "points" in merged_data.columns:
+            if "department" not in merged_data.columns:
+                merged_data["department"] = "Unknown"
+            else:
+                merged_data["department"] = merged_data["department"].fillna("Unknown")
+
+            dept_stats = merged_data.groupby("department").agg(
+                Total_Points=("points", "sum"),
+                Participating_Employees=("employee_email", "nunique"),
+                Completed_Engagements=("employee_email", "count")
+            ).reset_index().sort_values(by="Total_Points", ascending=False)
+            
+            dept_stats.columns = ["Department", "Points", "Employees", "Engagements"]
+            st.table(dept_stats)
+        else:
+            st.info("No department leaderboard data available yet.")
         
         # Feature 4: Campaign Summary Section
         st.markdown("---")
@@ -1151,7 +1167,18 @@ elif menu == "Admin - Reports":
             st.subheader("Total Points by Department")
             report_users = pd.read_csv(USERS_FILE)
             dept_points_df = m_eng.merge(report_users[['email', 'department']], left_on='employee_email', right_on='email', how='left')
-            st.bar_chart(dept_points_df.groupby('department')['points'].sum())
+            
+            if not dept_points_df.empty and "points" in dept_points_df.columns:
+                if "department" not in dept_points_df.columns:
+                    dept_points_df["department"] = "Unknown"
+                else:
+                    dept_points_df["department"] = dept_points_df["department"].fillna("Unknown")
+                
+                dept_viz_data = dept_points_df.groupby('department')['points'].sum()
+                if not dept_viz_data.empty:
+                    st.bar_chart(dept_viz_data)
+                else:
+                    st.info("No department data to display for this month.")
             
             st.download_button(
                 label="📥 Download Monthly Report (CSV)",
