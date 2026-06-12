@@ -193,21 +193,11 @@ st.markdown("""
 def page_intro(title, description, badges=None):
     badges_html = ""
     if badges:
-        badges_html = '<div class="intro-badges">' + ''.join(
-            [f'<span class="intro-badge">{badge}</span>' for badge in badges]
-        ) + '</div>'
+        badges_html = f'<div class="intro-badges">{" ".join([f"<span class=\"intro-badge\">{badge}</span>" for badge in badges])}</div>'
 
-    st.markdown(f"""
-    <div class="page-intro-card">
-        <div class="intro-content">
-            <div>
-                <h2>{title}</h2>
-                <p>{description}</p>
-            </div>
-            {badges_html}
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Flatten HTML to prevent Markdown parser from escaping closing tags
+    intro_html = f'<div class="page-intro-card"><div class="intro-content"><div><h2>{title}</h2><p>{description}</p></div>{badges_html}</div></div>'
+    st.markdown(intro_html, unsafe_allow_html=True)
 
 # File paths
 USERS_FILE = "users.csv"
@@ -234,13 +224,6 @@ if not os.path.exists(USERS_FILE):
     users_data.to_csv(USERS_FILE, index=False)
 else:
     users_data = pd.read_csv(USERS_FILE)
-
-st.markdown("""
-<div class="hero-card">
-    <div class="main-header">REACH Social Boost</div>
-    <div class="sub-header">Employee advocacy dashboard for boosting company social media engagement.</div>
-</div>
-""", unsafe_allow_html=True)
 
 # Migration Logic: Merge old employees.csv into users.csv if it exists
 OLD_EMPLOYEES_FILE = "employees.csv"
@@ -280,7 +263,9 @@ if not os.path.exists(PASSWORD_RESETS_FILE):
 # Create engagement file if not exists
 if not os.path.exists(ENGAGEMENT_FILE):
     engagement_data = pd.DataFrame(columns=[
+        "employee_name",
         "employee_email",
+        "department",
         "post_title",
         "campaign_name",
         "platform",
@@ -317,6 +302,12 @@ else:
     if "campaign_name" not in eng_df.columns:
         eng_df["campaign_name"] = "General"
         eng_df.to_csv(ENGAGEMENT_FILE, index=False)
+    # Migration for employee_name and department in engagement
+    if "employee_name" not in eng_df.columns:
+        eng_df["employee_name"] = ""
+    if "department" not in eng_df.columns:
+        eng_df["department"] = ""
+    eng_df.to_csv(ENGAGEMENT_FILE, index=False)
 
 def calculate_badges(points):
     """Returns list of badges based on total points."""
@@ -346,17 +337,18 @@ def log_notification(email, status, error=""):
 def send_email(receiver_email, subject, body):
     """Sends an email using SMTP settings from Streamlit secrets."""
     try:
-        # Safely fetch SMTP configuration
-        try:
-            smtp_conf = st.secrets["smtp"]
-        except Exception:
-            return False, "SMTP configuration is missing. Please set up SMTP credentials in Streamlit Secrets."
+        # 1 & 2. Read SMTP credentials from st.secrets safely
+        smtp_conf = st.secrets.get("smtp", {})
+        if not smtp_conf:
+            return False, "SMTP configuration is missing. Email notifications will not be sent."
         
-        # 2 & 3. Read values correctly from secrets
-        sender_email = st.secrets["smtp"]["sender_email"]
-        sender_password = st.secrets["smtp"]["sender_password"]
-        smtp_server = st.secrets["smtp"]["smtp_server"]
-        smtp_port = int(st.secrets["smtp"]["smtp_port"])
+        sender_email = smtp_conf.get("sender_email", "")
+        sender_password = smtp_conf.get("sender_password", "")
+        smtp_server = smtp_conf.get("smtp_server", "")
+        try:
+            smtp_port = int(smtp_conf.get("smtp_port", 465))
+        except (ValueError, TypeError):
+            smtp_port = 465
         
         # 4. Removes spaces from the app password before login
         sender_password = sender_password.replace(" ", "").strip()
@@ -504,6 +496,7 @@ if not st.session_state.logged_in:
                             st.session_state.user_email = user_data['email']
                             st.session_state.user_role = user_data['role']
                             st.session_state.user_name = user_data['name']
+                            st.session_state.user_department = user_data['department']
 
                             if remember_me_checkbox:
                                 st.session_state.remembered_email = login_email
@@ -612,7 +605,15 @@ if menu == "Employee Engagement":
     )
 
     st.subheader("Your Information")
-    employee_email = st.text_input("Your company email", value=st.session_state.user_email, disabled=True, key="employee_email_display")
+    col_info1, col_info2 = st.columns(2)
+    with col_info1:
+        emp_name = st.text_input("Full Name (Required)", value=st.session_state.get('user_name', ''), key="eng_name_input")
+        emp_email = st.text_input("Company Email (Optional)", value=st.session_state.get('user_email', ''), key="eng_email_input")
+    with col_info2:
+        dept_options = ["", "Marketing", "Sales", "HR", "Operations", "Finance", "IT", "Other"]
+        current_dept = st.session_state.get('user_department', '')
+        default_dept_idx = dept_options.index(current_dept) if current_dept in dept_options else 0
+        emp_dept = st.selectbox("Department (Required)", dept_options, index=default_dept_idx, key="eng_dept_select")
     
     # Feature 3 & 4: Badges Display
     eng_points = pd.read_csv(ENGAGEMENT_FILE)
@@ -657,45 +658,58 @@ if menu == "Employee Engagement":
             points_preview = (5 if liked else 0) + (10 if commented else 0) + (20 if shared else 0)
             st.markdown(f"**Total points to earn: {points_preview}**")
 
-        if st.button("Submit Engagement", type="primary", key="submit_engagement_button"):
-            if employee_email == "":
-                st.error("Please enter your email first.")
+        if st.button("Submit Engagement", type="primary", key="submit_engagement_button_logged_in"):
+            points = 0
+            if liked: points += 5
+            if commented: points += 10
+            if shared: points += 20
+
+            if not emp_name.strip():
+                st.error("Please enter your full name.")
+            elif not emp_dept:
+                st.error("Please select your department.")
+            elif points == 0:
+                st.error("Please select at least one action.")
             else:
                 # Check for duplicate submission
                 engagement_data = pd.read_csv(ENGAGEMENT_FILE)
-                already_submitted = not engagement_data[
-                    (engagement_data["employee_email"] == employee_email) & 
-                    (engagement_data["post_link"] == post_link) # Check by post link for uniqueness
-                ].empty
+                
+                if emp_email.strip():
+                    # Rule 5: If email provided, use it for duplicate prevention
+                    already_submitted = not engagement_data[
+                        (engagement_data["employee_email"] == emp_email.strip()) & 
+                        (engagement_data["post_link"] == post_link)
+                    ].empty
+                else:
+                    # Rule 6: If email not provided, use name + department + post/platform
+                    already_submitted = not engagement_data[
+                        (engagement_data["employee_name"] == emp_name.strip()) & 
+                        (engagement_data["department"] == emp_dept) & 
+                        (engagement_data["post_link"] == post_link)
+                    ].empty
 
                 if already_submitted:
                     st.warning(f"You have already submitted engagement for '{selected_post['post_title']}'. Duplicate claims are not allowed.")
                 else:
-                    points = 0
-                    if liked: points += 5
-                    if commented: points += 10
-                    if shared: points += 20
+                    new_record = pd.DataFrame([{
+                        "employee_name": emp_name.strip(),
+                        "employee_email": emp_email.strip() if emp_email else "",
+                        "department": emp_dept,
+                        "post_title": selected_post['post_title'],
+                        "campaign_name": campaign_name,
+                        "platform": platform,
+                        "post_link": post_link,
+                        "liked": liked,
+                        "commented": commented,
+                        "shared": shared,
+                        "points": points,
+                        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }])
 
-                    if points == 0:
-                        st.warning("Please select at least one action you performed.")
-                    else:
-                        new_record = pd.DataFrame([{
-                            "employee_email": employee_email,
-                            "post_title": selected_post['post_title'], # Use selected_post['post_title']
-                            "campaign_name": campaign_name,
-                            "platform": platform,
-                            "post_link": post_link,
-                            "liked": liked,
-                            "commented": commented,
-                            "shared": shared,
-                            "points": points,
-                            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        }])
+                    updated_data = pd.concat([engagement_data, new_record], ignore_index=True)
+                    updated_data.to_csv(ENGAGEMENT_FILE, index=False)
 
-                        updated_data = pd.concat([engagement_data, new_record], ignore_index=True)
-                        updated_data.to_csv(ENGAGEMENT_FILE, index=False)
-
-                        st.success(f"Success! You earned {points} points for your engagement on '{selected_post['post_title']}'.")
+                    st.success(f"Success! You earned {points} points for your engagement on '{selected_post['post_title']}'.")
 
 
 elif menu == "Leaderboard":
@@ -791,12 +805,10 @@ elif menu == "Leaderboard":
 elif menu == "Admin - Manage Posts":
     page_intro("Admin - Manage Posts", "Create social media posts, select platforms, and notify employees.")
     
-    # Proactive check for SMTP configuration with safe logic
-    try:
-        _ = st.secrets["smtp"]
-    except Exception:
-        st.error("SMTP configuration is missing. Please set up SMTP credentials in Streamlit Secrets.")
-        st.stop()
+    # 3. Proactive check for SMTP configuration safely without crashing the app
+    if not st.secrets.get("smtp"):
+        st.warning("SMTP configuration is missing. Email notifications will not be sent. Please set up SMTP credentials in Streamlit Secrets.")
+
     st.subheader("Publish New Post")
 
     # Platform selection outside form for dynamic link inputs
